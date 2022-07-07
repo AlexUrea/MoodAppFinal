@@ -1,2 +1,145 @@
-package com.db.moodappfinal.controller;public class UserController {
+package com.db.moodappfinal.controller;
+
+
+import com.db.moodappfinal.exception.JWTException;
+import com.db.moodappfinal.exception.TokenRefreshException;
+import com.db.moodappfinal.model.DTO.UserDTO;
+import com.db.moodappfinal.model.RefreshToken;
+import com.db.moodappfinal.model.User;
+import com.db.moodappfinal.payload.request.AuthenticationRequest;
+import com.db.moodappfinal.payload.request.LogOutRequest;
+import com.db.moodappfinal.payload.request.TokenRefreshRequest;
+import com.db.moodappfinal.payload.response.AuthenticationResponse;
+import com.db.moodappfinal.payload.response.MessageResponse;
+import com.db.moodappfinal.payload.response.TokenRefreshResponse;
+import com.db.moodappfinal.repository.UserRepository;
+import com.db.moodappfinal.service.RefreshTokenService;
+import com.db.moodappfinal.service.UserDetailsServiceImpl;
+import com.db.moodappfinal.service.UserService;
+import com.db.moodappfinal.util.JwtUtil;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.web.bind.annotation.*;
+
+import javax.servlet.http.HttpServletResponse;
+import javax.validation.Valid;
+import java.io.IOException;
+import java.util.List;
+import java.util.UUID;
+
+@RestController
+@RequiredArgsConstructor
+public class UserController {
+    private final JwtUtil jwtUtil;
+    private final UserRepository userRepository;
+    private final AuthenticationManager authenticationManager;
+    private final JwtUtil jwtTokenUtil;
+    private final UserDetailsServiceImpl userDetailsService;
+    private final RefreshTokenService refreshTokenService;
+
+    private final UserService userService;
+    BCryptPasswordEncoder bCryptPasswordEncoder = new BCryptPasswordEncoder();
+
+    @PostMapping(value = "/auth")
+    public ResponseEntity<?> createAuthenticationToken(@RequestBody AuthenticationRequest authenticationRequest) throws Exception {
+        try {
+            Authentication authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(authenticationRequest.getEmail(), authenticationRequest.getPassword()));
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+        } catch (BadCredentialsException e) {
+            throw new Exception("Incorrect username or password");
+        }
+        final UserDetails userDetails = userDetailsService.loadUserByUsername(authenticationRequest.getEmail());
+        final String jwt = jwtTokenUtil.generateToken(userDetails);
+        return ResponseEntity.ok(new AuthenticationResponse(jwt, refreshTokenService.createRefreshToken(authenticationRequest.getEmail())));
+    }
+
+    @PostMapping(value = "/register")
+    public String registerUser(@RequestBody AuthenticationRequest authenticationRequest) {
+        if (userRepository.findUserByEmail(authenticationRequest.getEmail()) != null)
+            return "The user already exists.";
+
+        User user = new User();
+        user.setUserID(UUID.randomUUID().toString());
+        user.setEmail(authenticationRequest.getEmail());
+        user.setUsername(authenticationRequest.getEmail());
+        user.setPassword(bCryptPasswordEncoder.encode(authenticationRequest.getPassword()));
+        user.setEnabled(true);
+        user.setAccountNonExpired(true);
+        user.setAccountNonLocked(true);
+        user.setCredentialsNonExpired(true);
+        userRepository.save(user);
+        return "The user was created.";
+    }
+
+    @GetMapping(value = "/bps/data/user/{JWT}")
+    public User getUserFromJWTPV(@PathVariable String JWT) throws JWTException {
+        return getUserFromJWT(JWT);
+    }
+
+    @GetMapping(value = "/data/user")
+    public User getUserFromJWTQP(@RequestParam String JWT) throws JWTException {
+        return getUserFromJWT(JWT);
+    }
+
+    public User getUserFromJWT(String JWT) throws JWTException {
+        String email = jwtUtil.extractEmail(JWT);
+
+        //noinspection DuplicatedCode
+        if (email != null) {
+            UserDetails userDetails = this.userDetailsService.loadUserByEmail(email);
+            if (jwtUtil.validateToken(JWT, userDetails)) {
+                return userRepository.findUserByEmail(email);
+            }
+        }
+        return null;
+    }
+
+    @PostMapping("/refresh-token")
+    public ResponseEntity<?> refreshToken(@RequestBody TokenRefreshRequest request) {
+        String requestRefreshToken = request.getRefreshToken();
+
+        return refreshTokenService.findByToken(requestRefreshToken)
+                .map(refreshTokenService::verifyExpiration)
+                .map(RefreshToken::getUserId)
+                .map(user -> {
+                    String token = jwtUtil.generateToken(userDetailsService.loadUserByUsername(user));
+                    return ResponseEntity.ok(new TokenRefreshResponse(token, requestRefreshToken));
+                })
+                .orElseThrow(() -> new TokenRefreshException(requestRefreshToken,
+                        "Refresh token is not in database!"));
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<?> logoutUser(@Valid @RequestBody LogOutRequest logOutRequest) {
+        refreshTokenService.deleteByUserId(logOutRequest.getUserId());
+        return ResponseEntity.ok(new MessageResponse("Log out successful!"));
+    }
+
+    @GetMapping("/list_users")
+    public List<UserDTO> listAllUsers() {
+        return userService.listAll().stream().map(user -> modelMapper.map(user, UserDTO.class)).collect(java.util.stream.Collectors.toList());
+    }
+
+    @GetMapping("/user/{id}")
+    public ResponseEntity<UserDTO> getUserById(@PathVariable Long id) {
+        User user = userService.getById(id);
+        UserDTO userResponse = modelMapper.map(user, UserDTO.class);
+        return ResponseEntity.ok().body(userResponse);
+    }
+
+    @PutMapping("/user/edit/{id}")
+    public Integer editUser(@PathVariable Long id, @RequestBody UserDTO userDTO, HttpServletResponse response) throws IOException {
+        User userRequest = modelMapper.map(userDTO, User.class);
+        userService.updateUser(id, userRequest);
+        response.setStatus(201);
+        return response.getStatus();
+    }
 }

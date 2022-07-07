@@ -40,4 +40,7 @@ public class MoodService {
     }
 
 
+    public List<Mood> getMoods() {
+        return moodRepository.findAll();
+    }
 }

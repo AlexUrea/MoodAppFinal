@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.List;
 
 @RestController
 public class MoodController {
@@ -34,6 +35,11 @@ public class MoodController {
     @GetMapping("/get-mood/{id}")
     public Mood getMoodById(@PathVariable Long id) {
         return moodService.getMoodById(id);
+    }
+
+    @GetMapping("/get-moods")
+    public List<Mood> getMoods() {
+        return moodService.getMoods();
     }
 
 }
